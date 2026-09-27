@@ -1,0 +1,30 @@
+# Data. Too large for git - see the README for how to get it back.
+#   Tellus grids: python modelling/scripts/fetch_tellus.py
+#   QuSpin logs:  copied in by hand, ask Peter
+modelling/data/
+
+# Generated plots and other script output
+modelling/outputs/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# CAD and document scratch files. 
+~$*
+*.bak
+*.dwl
+*.dwl2
+*.SLDPRT.~*
+*.SLDASM.~*
+*.SLDDRW.~*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
