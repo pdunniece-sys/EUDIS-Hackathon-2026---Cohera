@@ -215,6 +215,41 @@ GRADES: dict[str, ErrorModel] = {
         note="ICM-42688-P class. Noise from the TDK datasheet; biases assumed.",
     ),
 
+    # Our own X500's Pixhawk 6C, IMU0, MEASURED from a 37 min static log
+    # (hardware/drone_files/logs/log_14_30min_imu_test.bin, 15 Oct 2026,
+    # indoors, no GPS). Analysis in notebooks/imu_static.ipynb. Allan figures
+    # are the RMS over the three axes of the steady part (after the board
+    # heater reached 45 degC, 4 min in).
+    #
+    # MEASURED, Allan deviation:
+    #   gyro noise   0.0055 / 0.0141 / 0.0040 deg/s/rtHz (x/y/z) - 2-5x the
+    #                datasheet's 2.8 mdps/rtHz, worst on y
+    #   accel noise  97 / 90 / 256 ug/rtHz - worst on z
+    #   gyro bias RW 0.00024 / 0.00062 / 0.00016 deg/s/rts
+    #   accel bias RW 7 (y) and 23 (z) ug/rts; x never turned up in 33 min
+    # MEASURED, residual gyro bias after the EKF has learnt it: raw gyro mean
+    #   minus the EKF's XKF1 estimate, under 0.008 deg/s on every axis over
+    #   three windows. That includes the Earth's rotation (up to 0.004 deg/s
+    #   here), so it is an upper bound, and it is ONE power-up, not a spread.
+    #   The raw bias it learnt was 0.26 / -0.72 / 0.22 deg/s - gyros are
+    #   calibrated at boot (24.5 degC) and the heater then takes them to 45,
+    #   with INS_TCAL off. A GNSS cut before the EKF has converged sees that.
+    # EKF's own estimate: accel bias 0.02 m/s^2 on z, matching the 0.024 m/s^2
+    #   shortfall of |accel| against local gravity.
+    # ASSUMED, not measurable statically: scale factors, kept from above.
+    "x500_measured": ErrorModel(
+        accel_noise_density=166e-6 * G0,           # MEASURED, RMS of 97/90/256 ug/rtHz
+        gyro_noise_density=0.0090 * DEG,           # MEASURED, RMS over axes
+        accel_turnon_bias=0.02,                    # MEASURED (EKF, z axis only)
+        gyro_turnon_bias=0.005 * DEG,              # MEASURED residual after EKF, upper bound
+        accel_bias_rw=1.65e-4,                     # MEASURED, y/z only, m/s^2/sqrt(s)
+        gyro_bias_rw=0.0004 * DEG,                 # MEASURED, RMS over axes
+        accel_scale=0.001,                         # ASSUMED
+        gyro_scale=0.001,                          # ASSUMED
+        name="x500_measured",
+        note="Our Pixhawk 6C IMU0, static log 15 Oct 2026. Post-EKF residual bias.",
+    ),
+
     # Fibre-optic gyro class, the sort of unit fitted to a crewed aircraft or a
     # serious UAV. Not a specific product - these are the order-of-magnitude
     # bands for "tactical grade" as given in the standard reference tables
