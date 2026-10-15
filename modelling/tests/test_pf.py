@@ -165,3 +165,31 @@ def test_consumer_imu_filter_beats_ins_fivefold(survey):
                                  filter_map)
     assert run.error_m[-1] < 0.2 * run.ins_error_m[-1]
     assert ins_run.error_m[-1] > 1000.0      # the INS really was lost
+
+
+# ----------------------------------------------------------------------
+# Self-map gridding
+# ----------------------------------------------------------------------
+
+def test_grid_lines_reproduces_a_plane_between_lines():
+    """Linear gridding of lines across a linear field must be exact between
+    them - so any residual on real data is the field or the sensor, not the
+    gridding."""
+    from navfilter import selfmap
+
+    lat, lon = np.meshgrid(LAT + np.arange(5) * 50 / 111_000,     # 5 lines, 50 m apart
+                           LON + np.linspace(0, 500 / 68_000, 200), indexing="ij")
+    lat, lon = lat.ravel(), lon.ravel()
+    plane = lambda la, lo: 3000.0 * (la - LAT) + 1000.0 * (lo - LON)
+    n = len(lat)
+    log = selfmap.SurveyLog(np.arange(n) * 0.1, np.zeros(n), lat, lon, np.full(n, 60.0),
+                            plane(lat, lon), np.repeat(np.arange(5), 200),
+                            np.ones(n, dtype=int), model=None)
+
+    grid = selfmap.grid_lines(log, log.line % 2 == 0, cell_m=10)
+    mid_lat = lat[log.line == 1]
+    mid_lon = lon[log.line == 1]
+    got = grid.sample_track(mid_lat, mid_lon)
+    ok = np.isfinite(got)
+    assert ok.mean() > 0.9
+    np.testing.assert_allclose(got[ok], plane(mid_lat, mid_lon)[ok], atol=0.01)
