@@ -246,6 +246,18 @@ class PFRun:
         """2-sigma horizontal radius from the covariance (sqrt of the trace)."""
         return 2.0 * np.sqrt(np.trace(self.cov, axis1=1, axis2=2))
 
+    def protection_level_m(self, k: float = 5.33) -> np.ndarray:
+        """Horizontal protection level: k times the cloud's largest standard
+        deviation, sqrt of the largest covariance eigenvalue.
+
+        k = 5.33 is the Gaussian multiplier for a 1e-7 chance of the error
+        exceeding it - the convention in GNSS integrity. That probability only
+        holds if the cloud is honest about itself, which a particle filter on
+        a multimodal map is not guaranteed to be; count the samples where
+        error_m > protection_level_m before trusting it.
+        """
+        return k * np.sqrt(np.linalg.eigvalsh(self.cov)[:, -1])
+
     def _at(self, series: np.ndarray, seconds: float) -> float:
         if seconds > self.elapsed_s[-1]:
             return float("nan")
