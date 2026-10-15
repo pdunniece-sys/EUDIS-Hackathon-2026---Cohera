@@ -12,18 +12,30 @@ The INS is integrated once - the same corrupted run used as the INS-only
 baseline, so the comparison is like for like. Each particle is a hypothesis
 about how wrong that one INS is, horizontally:
 
-    x_i = [dN, dE, dvN, dvE]      metres and m/s
+    x_i = [dN, dE, dvN, dvE, daN, daE]      metres, m/s, m/s^2
     corrected position = INS position + (dN, dE)
 
 Running a full mechanisation per particle would cost N times as much and buy
 nothing here: the vertical is barometer-aided and attitude does not enter the
-map likelihood. The price is that the cloud's motion model is a crude one -
-constant velocity error plus a random walk - so `q_vel` has to be large enough
-to cover how the real INS error actually grows.
+map likelihood. The price is that the cloud's motion model is a crude one,
+so the process noise has to be large enough to cover how the real INS error
+actually grows.
+
+Why an acceleration error, not just velocity
+--------------------------------------------
+The dominant consumer-MEMS error is a gyro bias. It tilts the platform a
+little more every second, and the tilt leaks gravity into the horizontal: an
+acceleration error that itself grows, so velocity error grows as t^2 and
+position as t^3. With the ASSUMED 0.05 deg/s bias that is 115 m/s of velocity
+error five minutes after the cut. A constant-velocity error state cannot
+follow that at any process noise that still lets the map pin it down, so the
+state carries an acceleration error driven by a random walk (`q_acc`). For a
+tactical IMU the extra states are nearly idle.
 
 One cycle, at `update_hz`
 -------------------------
-    predict   dp += dv dt;  dv += N(0, q_vel sqrt(dt))
+    predict   dp += dv dt + da dt^2/2;  dv += da dt + N(0, q_vel sqrt(dt));
+              da += N(0, q_acc sqrt(dt))
     weight    log w += -0.5 ((z - map(INS + dp)) / sigma)^2, -inf off the map
     estimate  weighted mean and 2x2 covariance of (dN, dE)
     resample  systematic, when ESS < N/2, then roughen
@@ -36,6 +48,21 @@ hundreds of metres, which the aircraft crosses in tens of seconds. Treating
 every reading as independent multiplies the same error into the weights five
 times and the cloud collapses onto a confident wrong answer. Every reading
 that is used is still an exact sample, not an average.
+
+The core field is removed at the wrong place
+--------------------------------------------
+The measured anomaly is reading minus IGRF minus diurnal, with IGRF evaluated
+at the INS position - the only position the aircraft has. The core field
+changes by ~2.6 nT/km here, so an INS that is 10 km out puts a 26 nT bias on
+every reading, bigger than the anomaly contrast. Given `core_fn`, the filter
+puts that back per particle: each hypothesis says where the aircraft really
+is, so it also says how wrong the IGRF subtraction was,
+
+    z_i = z - grad|B_core| . (dN, dE)_i
+
+with the gradient taken once along the INS track. Linear in the offset, which
+is good to a few nT out to tens of km - beyond that the consumer INS is lost
+anyway. This uses only the filter's own hypotheses, not truth.
 
 No peeking
 ----------
@@ -71,6 +98,13 @@ G0 = 9.80665
 Q_VEL_INFLATION = 3.0
 Q_VEL_FLOOR = 1e-3   # m/s/sqrt(s); keeps a perfect-IMU cloud from freezing
 
+# Acceleration-error random walk, m/s^2/sqrt(s). A gyro bias b gives a jerk of
+# g*b, a steady ramp in acceleration error. A random walk covers a ramp over a
+# horizon T if q_acc ~ g*b*sqrt(T); T is how long the map typically needs to
+# correct the cloud, ASSUMED at one minute. Inflated by the same x3.
+Q_ACC_HORIZON_S = 60.0
+Q_ACC_FLOOR = 1e-4
+
 
 def default_q_vel(grade: str | None) -> float:
     """Process noise for the velocity error, derived from an IMU grade."""
@@ -79,6 +113,23 @@ def default_q_vel(grade: str | None) -> float:
     model = GRADES[grade]
     q = model.accel_bias_rw + G0 * model.gyro_bias_rw
     return max(Q_VEL_INFLATION * q, Q_VEL_FLOOR)
+
+
+def default_q_acc(grade: str | None) -> float:
+    """Process noise for the acceleration error, derived from an IMU grade."""
+    if grade is None:
+        return Q_ACC_FLOOR
+    jerk = G0 * GRADES[grade].gyro_turnon_bias
+    return max(Q_VEL_INFLATION * jerk * np.sqrt(Q_ACC_HORIZON_S), Q_ACC_FLOOR)
+
+
+def default_sigma_acc0(grade: str | None) -> float:
+    """Acceleration-error spread at the cut: the accelerometer turn-on bias.
+
+    The tilt is zero at the cut, because the INS starts from the GNSS-aided
+    attitude, so only the accelerometer contributes.
+    """
+    return 1e-3 if grade is None else float(GRADES[grade].accel_turnon_bias)
 
 
 @dataclass
@@ -90,9 +141,13 @@ class PFConfig:
                          handover from a GNSS-aided filter; 500 m is a cold
                          start
         sigma_vel0_mps   velocity spread at the cut
-        grade            IMU grade name, used only for the default q_vel
+        sigma_acc0       acceleration-error spread at the cut, m/s^2. None
+                         derives it from `grade`
+        grade            IMU grade name, used only for the defaults
         q_vel            velocity random walk, m/s/sqrt(s). None derives it
                          from `grade`
+        q_acc            acceleration random walk, m/s^2/sqrt(s). None
+                         derives it from `grade`
         sigma_*_nt       measurement error budget, combined in quadrature:
                          sensor (OPM after decimation), map (gridding and
                          levelling, see maps.py), interference (platform,
@@ -106,8 +161,10 @@ class PFConfig:
     n_particles: int = 2000
     sigma_pos0_m: float = 30.0
     sigma_vel0_mps: float = 0.2
+    sigma_acc0: float | None = None
     grade: str | None = None
     q_vel: float | None = None
+    q_acc: float | None = None
     sigma_sensor_nt: float = 2.0
     sigma_map_nt: float = 4.0
     sigma_interf_nt: float = 2.0
@@ -117,6 +174,7 @@ class PFConfig:
     roughen: float = 0.2
     roughen_floor_m: float = 1.0
     roughen_floor_mps: float = 0.01
+    roughen_floor_mps2: float = 1e-4
     snapshot_every: int = 10
     seed: int | None = 0
 
@@ -131,6 +189,15 @@ class PFConfig:
     def q(self) -> float:
         return self.q_vel if self.q_vel is not None else default_q_vel(self.grade)
 
+    @property
+    def qa(self) -> float:
+        return self.q_acc if self.q_acc is not None else default_q_acc(self.grade)
+
+    @property
+    def acc0(self) -> float:
+        return (self.sigma_acc0 if self.sigma_acc0 is not None
+                else default_sigma_acc0(self.grade))
+
 
 @dataclass
 class PFRun:
@@ -142,7 +209,7 @@ class PFRun:
         ess          effective sample size after each weighting
         error_m      horizontal error of `estimate` against truth
         ins_error_m  the INS-only error at the same times
-        snapshots    list of dicts: t, particles (N, 4), weights, ins_lat, ins_lon
+        snapshots    list of dicts: t, particles (N, 6), weights, ins_lat, ins_lon
     """
 
     t: np.ndarray
@@ -235,19 +302,22 @@ class ParticleFilter:
 
     def initialise(self, rng: np.random.Generator) -> np.ndarray:
         c = self.config
-        x = np.empty((c.n_particles, 4))
-        x[:, :2] = rng.normal(0.0, c.sigma_pos0_m, (c.n_particles, 2))
-        x[:, 2:] = rng.normal(0.0, c.sigma_vel0_mps, (c.n_particles, 2))
+        x = np.empty((c.n_particles, 6))
+        x[:, 0:2] = rng.normal(0.0, c.sigma_pos0_m, (c.n_particles, 2))
+        x[:, 2:4] = rng.normal(0.0, c.sigma_vel0_mps, (c.n_particles, 2))
+        x[:, 4:6] = rng.normal(0.0, c.acc0, (c.n_particles, 2))
         return x
 
     def predict(self, x: np.ndarray, dt: float, rng: np.random.Generator) -> np.ndarray:
+        c = self.config
         x = x.copy()
-        x[:, :2] += x[:, 2:] * dt
-        x[:, 2:] += rng.normal(0.0, self.config.q * np.sqrt(dt), (len(x), 2))
+        x[:, 0:2] += x[:, 2:4] * dt + 0.5 * x[:, 4:6] * dt**2
+        x[:, 2:4] += x[:, 4:6] * dt + rng.normal(0.0, c.q * np.sqrt(dt), (len(x), 2))
+        x[:, 4:6] += rng.normal(0.0, c.qa * np.sqrt(dt), (len(x), 2))
         return x
 
     def weight(self, logw: np.ndarray, lat: np.ndarray, lon: np.ndarray,
-               z: float) -> tuple[np.ndarray, bool]:
+               z) -> tuple[np.ndarray, bool]:
         """Apply one reading. Returns (new log weights, whether it was used).
 
         If every particle is off the map the reading carries no information
@@ -263,12 +333,14 @@ class ParticleFilter:
     def roughen(self, x: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         """Jitter after resampling, so duplicated particles spread out again."""
         c = self.config
-        floor = np.array([c.roughen_floor_m] * 2 + [c.roughen_floor_mps] * 2)
+        floor = np.array([c.roughen_floor_m] * 2 + [c.roughen_floor_mps] * 2
+                         + [c.roughen_floor_mps2] * 2)
         scale = np.maximum(c.roughen * x.std(axis=0), floor)
         return x + rng.normal(size=x.shape) * scale
 
     def run(self, ins: Trajectory, t_meas: np.ndarray, z_nt: np.ndarray,
-            truth: Trajectory | None = None, name: str = "") -> PFRun:
+            truth: Trajectory | None = None, name: str = "",
+            core_fn=None) -> PFRun:
         """Filter a whole flight.
 
             ins     the INS estimate from the GNSS cut onwards; its first
@@ -276,6 +348,9 @@ class ParticleFilter:
             t_meas  when each reading was *taken* (readings.t - latency)
             z_nt    measured anomaly, NaN where there is none
             truth   for scoring only, after the loop
+            core_fn (lat, lon, alt_m) -> |B_core| in nT, vectorised; when
+                    given, the IGRF error from the INS position is corrected
+                    per particle (see module docstring)
         """
         c = self.config
         rng = np.random.default_rng(c.seed)
@@ -297,8 +372,17 @@ class ParticleFilter:
         where = ins.at(t_upd)
         m_lat, m_lon = metres_per_degree(float(ins.lat[0]))
 
+        grad = np.zeros((len(t_upd), 2))       # nT per metre, north and east
+        if core_fn is not None and len(t_upd):
+            step = 500.0                        # m, central difference
+            dlat, dlon = step / m_lat, step / m_lon
+            grad[:, 0] = (core_fn(where.lat + dlat, where.lon, where.alt_m)
+                          - core_fn(where.lat - dlat, where.lon, where.alt_m)) / (2 * step)
+            grad[:, 1] = (core_fn(where.lat, where.lon + dlon, where.alt_m)
+                          - core_fn(where.lat, where.lon - dlon, where.alt_m)) / (2 * step)
+
         n_upd = len(t_upd)
-        means = np.zeros((n_upd + 1, 4))
+        means = np.zeros((n_upd + 1, 6))
         covs = np.zeros((n_upd + 1, 2, 2))
         esss = np.full(n_upd + 1, float(c.n_particles))
 
@@ -315,7 +399,8 @@ class ParticleFilter:
 
             lat = where.lat[k] + x[:, 0] / m_lat
             lon = where.lon[k] + x[:, 1] / m_lon
-            logw, used = self.weight(logw, lat, lon, z_upd[k])
+            z = z_upd[k] - x[:, 0:2] @ grad[k]
+            logw, used = self.weight(logw, lat, lon, z)
             skipped += not used
             w = np.exp(logw)
 
@@ -340,7 +425,7 @@ class ParticleFilter:
         vel = None
         if base.vel_ned is not None:
             vel = base.vel_ned.copy()
-            vel[:, :2] += means[:, 2:]
+            vel[:, :2] += means[:, 2:4]
         estimate = Trajectory(t, base.lat + means[:, 0] / m_lat,
                               base.lon + means[:, 1] / m_lon, base.alt_m, vel,
                               name=f"{name} INS+MagNav".strip())
