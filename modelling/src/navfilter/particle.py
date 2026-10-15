@@ -40,14 +40,20 @@ One cycle, at `update_hz`
     estimate  weighted mean and 2x2 covariance of (dN, dE)
     resample  systematic, when ESS < N/2, then roughen
 
-Why 2 Hz when the OPM gives 10
-------------------------------
-Consecutive 10 Hz readings are not independent: the platform noise is red
-(65% of its variance below 0.3 Hz) and the map error is correlated over
-hundreds of metres, which the aircraft crosses in tens of seconds. Treating
-every reading as independent multiplies the same error into the weights five
-times and the cloud collapses onto a confident wrong answer. Every reading
-that is used is still an exact sample, not an average.
+Why 0.5 Hz and ~10 nT, when the OPM gives 10 Hz and the budget is 5 nT
+---------------------------------------------------------------------
+Consecutive readings are not independent: the platform noise is red (65% of
+its variance below 0.3 Hz) and the map error is correlated over ~500 m, which
+the aircraft takes a minute to fly through. A filter that treats each reading
+as independent counts the same error over and over, the cloud collapses onto
+a confident wrong answer, and it never recovers. Tuned on the 20 minute A7
+lawnmower (seed 0), at 2 Hz and 5 nT even a *perfect* IMU on the exact map
+was driven 400-700 m off while the filter claimed +-10 m.
+
+Two remedies, used together: update less often (`update_hz`, 0.5 by default)
+and inflate the error budget for the correlation that remains
+(`correlation_inflation`, x2). Both are TUNED, not derived; the honest
+version is a likelihood that models the correlation, which v1 does not.
 
 The core field is removed at the wrong place
 --------------------------------------------
@@ -96,14 +102,15 @@ G0 = 9.80665
 # approximation of how fast the INS velocity error wanders, not a derivation,
 # and both inputs are themselves ASSUMED in ins/errors.py.
 Q_VEL_INFLATION = 3.0
-Q_VEL_FLOOR = 1e-3   # m/s/sqrt(s); keeps a perfect-IMU cloud from freezing
+Q_VEL_FLOOR = 1e-4   # m/s/sqrt(s); keeps a perfect-IMU cloud from freezing
 
 # Acceleration-error random walk, m/s^2/sqrt(s). A gyro bias b gives a jerk of
 # g*b, a steady ramp in acceleration error. A random walk covers a ramp over a
 # horizon T if q_acc ~ g*b*sqrt(T); T is how long the map typically needs to
-# correct the cloud, ASSUMED at one minute. Inflated by the same x3.
-Q_ACC_HORIZON_S = 60.0
-Q_ACC_FLOOR = 1e-4
+# correct the cloud, TUNED to 30 s (60 s with x3 inflation let the consumer
+# cloud spread faster than the map could pin it).
+Q_ACC_HORIZON_S = 30.0
+Q_ACC_FLOOR = 1e-6
 
 
 def default_q_vel(grade: str | None) -> float:
@@ -120,7 +127,7 @@ def default_q_acc(grade: str | None) -> float:
     if grade is None:
         return Q_ACC_FLOOR
     jerk = G0 * GRADES[grade].gyro_turnon_bias
-    return max(Q_VEL_INFLATION * jerk * np.sqrt(Q_ACC_HORIZON_S), Q_ACC_FLOOR)
+    return max(jerk * np.sqrt(Q_ACC_HORIZON_S), Q_ACC_FLOOR)
 
 
 def default_sigma_acc0(grade: str | None) -> float:
@@ -129,7 +136,7 @@ def default_sigma_acc0(grade: str | None) -> float:
     The tilt is zero at the cut, because the INS starts from the GNSS-aided
     attitude, so only the accelerometer contributes.
     """
-    return 1e-3 if grade is None else float(GRADES[grade].accel_turnon_bias)
+    return 1e-5 if grade is None else float(GRADES[grade].accel_turnon_bias)
 
 
 @dataclass
@@ -153,7 +160,10 @@ class PFConfig:
                          levelling, see maps.py), interference (platform,
                          unmeasured). The defaults total about 5 nT and are
                          ASSUMED
-        sigma_total_nt   overrides the budget with one number
+        correlation_inflation  multiplies the budget, because the errors are
+                         correlated between updates (see module docstring).
+                         TUNED
+        sigma_total_nt   overrides all of the above with one number
         update_hz        measurement updates per second (see module docstring)
         snapshot_every   keep the cloud every this many updates, for replay
     """
@@ -168,22 +178,24 @@ class PFConfig:
     sigma_sensor_nt: float = 2.0
     sigma_map_nt: float = 4.0
     sigma_interf_nt: float = 2.0
+    correlation_inflation: float = 2.0
     sigma_total_nt: float | None = None
-    update_hz: float = 2.0
+    update_hz: float = 0.5
     resample_frac: float = 0.5
     roughen: float = 0.2
-    roughen_floor_m: float = 1.0
-    roughen_floor_mps: float = 0.01
+    roughen_floor_m: float = 5.0
+    roughen_floor_mps: float = 0.05
     roughen_floor_mps2: float = 1e-4
-    snapshot_every: int = 10
+    snapshot_every: int = 5
     seed: int | None = 0
 
     @property
     def sigma_nt(self) -> float:
         if self.sigma_total_nt is not None:
             return float(self.sigma_total_nt)
-        return float(np.sqrt(self.sigma_sensor_nt**2 + self.sigma_map_nt**2
-                             + self.sigma_interf_nt**2))
+        return float(self.correlation_inflation
+                     * np.sqrt(self.sigma_sensor_nt**2 + self.sigma_map_nt**2
+                               + self.sigma_interf_nt**2))
 
     @property
     def q(self) -> float:

@@ -1,10 +1,16 @@
 """Checks on the particle filter.
 
-The first two tests use a small synthetic grid and no Tellus data: they pin
+The first two groups use a small synthetic grid and no Tellus data: they pin
 down the two mechanisms that most often go silently wrong in a particle
 filter - resampling that does not preserve the distribution, and particles
 off the map being scored as if the map said something about them.
+
+The last two fly five minutes over A7 and skip if the grid is not downloaded.
+One checks the filter does no harm when nothing is wrong; the other is the
+headline claim in miniature.
 """
+
+import datetime as dt
 
 import numpy as np
 import pytest
@@ -12,7 +18,17 @@ from affine import Affine
 from pyproj import Transformer
 from rasterio.crs import CRS
 
-from navfilter import ParticleFilter, PFConfig, grid_from_array, systematic_resample
+from ins import lawnmower, run_ins, synthetic_flight
+from navfilter import (
+    ParticleFilter,
+    PFConfig,
+    degrade_map,
+    grid_from_array,
+    systematic_resample,
+)
+from sensor import FieldModel, ScalarOPM
+from tellus import MagneticGrid, products
+from tellus.continuation import continue_to_altitude
 
 LAT, LON = 52.45, -6.40
 
@@ -88,3 +104,64 @@ def test_all_off_map_update_leaves_weights_unchanged(small_grid):
 
     assert not used
     np.testing.assert_array_equal(new, logw)
+
+
+# ----------------------------------------------------------------------
+# 3-4. Whole filter on a short flight over Tellus A7
+# ----------------------------------------------------------------------
+
+grid_available = pytest.mark.skipif(
+    not products.get("a7_tmi").tif_path.exists(),
+    reason="run scripts/fetch_tellus.py first",
+)
+
+
+@pytest.fixture(scope="module")
+def survey():
+    """A five-minute lawnmower over A7, the field along it, and a FieldModel."""
+    truth, imu = synthetic_flight(lawnmower((LAT, LON), 800, 450, 150),
+                                  alt_m=60.0, speed_mps=8.0, rate_hz=250.0)
+    grid = MagneticGrid("a7_tmi").subset((LON - 0.05, LAT - 0.05, LON + 0.05, LAT + 0.05))
+    model = FieldModel(grid=grid, date=dt.date(2026, 10, 15))
+    return truth, imu, grid, model, model.at(truth)
+
+
+def silent_opm():
+    return ScalarOPM(rate_hz=250.0, instrument_noise_pt_per_rthz=0.0,
+                     platform_noise_nt_rms=0.0, mains_nt_rms=0.0,
+                     heading_error_nt=0.0, dead_zone_deg=0.0)
+
+
+def filter_flight(survey, opm, grade, filter_map, **config):
+    truth, imu, _, model, field = survey
+    ins_run = run_ins(imu, truth, t_cut=0.0, grade=grade, seed=0)
+    readings = opm.emulate(truth, field, seed=0)
+    anomaly = opm.to_anomaly(readings, ins_run.estimate, model)
+    core = lambda la, lo, al: np.linalg.norm(model.core_field_ned(la, lo, al), axis=1)
+    pf = ParticleFilter(filter_map, PFConfig(n_particles=500, grade=grade, seed=0, **config))
+    return ins_run, pf.run(ins_run.estimate, readings.t - readings.latency_s, anomaly,
+                           truth=truth, core_fn=core)
+
+
+@grid_available
+def test_perfect_imu_exact_map_no_noise_stays_close(survey):
+    """With nothing wrong anywhere, the filter must not invent an error.
+
+    The INS is exact, so all the filter can do is hold the cloud on the truth;
+    a filter that wanders here is being pushed by its own machinery.
+    """
+    _, _, grid, _, _ = survey
+    _, run = filter_flight(survey, silent_opm(), None, continue_to_altitude(grid, 60.0))
+    assert np.nanmax(run.error_m) < 30.0
+
+
+@grid_available
+def test_consumer_imu_filter_beats_ins_fivefold(survey):
+    """The headline claim, small: the map holds a consumer INS that has drifted
+    kilometres to a fraction of that, with a realistic sensor on a degraded map."""
+    _, _, grid, _, _ = survey
+    filter_map = degrade_map(continue_to_altitude(grid, 60.0), seed=1)
+    ins_run, run = filter_flight(survey, ScalarOPM(rate_hz=250.0), "consumer_mems",
+                                 filter_map)
+    assert run.error_m[-1] < 0.2 * run.ins_error_m[-1]
+    assert ins_run.error_m[-1] > 1000.0      # the INS really was lost
