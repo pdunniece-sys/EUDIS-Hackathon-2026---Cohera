@@ -221,6 +221,7 @@ class PFRun:
         ess          effective sample size after each weighting
         error_m      horizontal error of `estimate` against truth
         ins_error_m  the INS-only error at the same times
+        ins_track    the uncorrected INS, at `t`, for plotting next to `estimate`
         snapshots    list of dicts: t, particles (N, 6), weights, ins_lat, ins_lon
     """
 
@@ -234,6 +235,7 @@ class PFRun:
     t_cut: float = 0.0
     name: str = ""
     n_skipped: int = 0
+    ins_track: Trajectory | None = None
 
     @property
     def elapsed_s(self) -> np.ndarray:
@@ -449,4 +451,5 @@ class ParticleFilter:
             error = ins_error = np.full(len(t), np.nan)
 
         return PFRun(t, estimate, covs, esss, error, ins_error, snapshots,
-                     t_cut=float(ins.t[0]), name=name, n_skipped=skipped)
+                     t_cut=float(ins.t[0]), name=name, n_skipped=skipped,
+                     ins_track=base)
