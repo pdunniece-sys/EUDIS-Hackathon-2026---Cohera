@@ -108,7 +108,8 @@ def plot(runs, truth, grid, path: Path, subtitle: str):
     mp.set_xlabel("ITM easting (m)")
     mp.set_ylabel("ITM northing (m)")
     mp.set_title("tracks over the anomaly map", loc="left", color=INK)
-    mp.legend(frameon=False, fontsize=7, loc="upper right")
+    mp.legend(frameon=False, fontsize=7, ncol=3, loc="upper center",
+              bbox_to_anchor=(0.5, -0.12))
 
     fig.suptitle(f"Magnetic anomaly navigation over Tellus A7 — {subtitle}",
                  color=MUTED, fontsize=10, x=0.01, ha="left")
@@ -129,7 +130,7 @@ def main() -> None:
                         help="total measurement sigma; default is the PFConfig budget")
     parser.add_argument("--cold-start", action="store_true",
                         help="500 m initial position spread instead of 30 m")
-    parser.add_argument("--update-hz", type=float, default=2.0)
+    parser.add_argument("--update-hz", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--grades", nargs="+", default=["consumer_mems", "tactical"])
     parser.add_argument("--product", default="a7_tmi")
