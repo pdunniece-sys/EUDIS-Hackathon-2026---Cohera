@@ -16,6 +16,7 @@ from navfilter.particle import (
     ParticleFilter,
     PFConfig,
     PFRun,
+    default_q_acc,
     default_q_vel,
     ess,
     log_likelihood,
@@ -25,5 +26,5 @@ from navfilter.particle import (
 __all__ = [
     "ParticleFilter", "PFConfig", "PFRun",
     "degrade_map", "grid_from_array",
-    "systematic_resample", "log_likelihood", "ess", "default_q_vel",
+    "systematic_resample", "log_likelihood", "ess", "default_q_vel", "default_q_acc",
 ]
