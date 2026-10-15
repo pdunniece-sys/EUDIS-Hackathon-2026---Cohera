@@ -193,3 +193,34 @@ def test_grid_lines_reproduces_a_plane_between_lines():
     ok = np.isfinite(got)
     assert ok.mean() > 0.9
     np.testing.assert_allclose(got[ok], plane(mid_lat, mid_lon)[ok], atol=0.01)
+
+
+# ----------------------------------------------------------------------
+# Navigability
+# ----------------------------------------------------------------------
+
+def _nav_of(values):
+    from navfilter.navigability import information_map
+
+    crs = CRS.from_epsg(2157)
+    x0, y0 = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(LON, LAT)
+    n = values.shape[0]
+    grid = grid_from_array(values, Affine(50.0, 0, x0 - n * 25, 0, -50.0, y0 + n * 25), crs)
+    nav = information_map(grid)
+    mid = nav.t_nn.shape[0] // 2
+    return nav, nav.bound_m()[mid, mid], nav.anisotropy()[mid, mid]
+
+
+def test_a_steep_ramp_is_not_navigable_but_texture_is():
+    """A ramp has a large gradient in one direction and none along it, so you
+    can slide along it undetected: the weakest-direction bound must say so.
+    Texture with the same gradient size in every direction must score well."""
+    rr, cc = np.mgrid[0:200, 0:200] * 50.0                 # metres, 10 km square
+    ramp = 0.1 * rr                                         # 0.1 nT/m, north-south
+    egg = 30 * np.sin(2 * np.pi * rr / 2000) * np.sin(2 * np.pi * cc / 2000)
+
+    _, ramp_bound, ramp_aniso = _nav_of(ramp)
+    _, egg_bound, egg_aniso = _nav_of(egg)
+
+    assert ramp_aniso < 0.01 and not ramp_bound < 1000.0     # inf or huge
+    assert egg_aniso > 0.3 and egg_bound < 50.0
