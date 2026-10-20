@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn an ArduPilot DataFlash .bin log into one CSV per message type.
 
-    python scripts/extract_ardupilot_log.py ../hardware/drone_files/logs/log_14_30min_imu_test.bin
+    python scripts/extract_ardupilot_log.py ../hardware/flight_logs/2026-10-15_static_imu_test.bin
     python scripts/extract_ardupilot_log.py LOG.bin --all          # every message type
     python scripts/extract_ardupilot_log.py LOG.bin --types IMU XKF1
 

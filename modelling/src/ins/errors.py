@@ -216,7 +216,7 @@ GRADES: dict[str, ErrorModel] = {
     ),
 
     # Our own X500's Pixhawk 6C, IMU0, MEASURED from a 37 min static log
-    # (hardware/drone_files/logs/log_14_30min_imu_test.bin, 15 Oct 2026,
+    # (hardware/flight_logs/2026-10-15_static_imu_test.bin.zip, 15 Oct 2026,
     # indoors, no GPS). Analysis in notebooks/imu_static.ipynb. Allan figures
     # are the RMS over the three axes of the steady part (after the board
     # heater reached 45 degC, 4 min in).

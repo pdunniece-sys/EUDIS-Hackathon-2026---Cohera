@@ -4,12 +4,14 @@ The simulation and modelling part of the magnetic anomaly navigation project.
 Everything here is self-contained; see the [repo README](../README.md) for how it
 fits with the rest of the work.
 
-Three independent parts:
+Five parts:
 
 - **Tellus** — the Irish airborne magnetic anomaly *map*, sampled along a path.
 - **QuSpin** — a raw magnetometer *flight log*, parsed into usable arrays.
 - **INS** — how far the drone drifts on inertial sensors alone once GNSS stops.
 - **Sensor** — what a magnetometer on the drone would actually read.
+- **Navfilter** — the error-state particle filter that matches readings to the
+  map and bounds the INS drift.
 
 Each has its own module, scripts and tests, and they share only the data types
 they have to.
@@ -42,7 +44,7 @@ pip install -e "./modelling[dev]"
 # then from this directory
 python scripts/fetch_tellus.py     # downloads ~93 MB, takes a few minutes
 python scripts/inspect_grid.py     # prints the grid's details, writes plots
-pytest                             # 16 checks
+pytest
 jupyter lab notebooks/explore.ipynb
 ```
 
@@ -79,6 +81,21 @@ src/sensor/interference.py  the drone's own field. Zero unless switched on
 src/sensor/timing.py        latency, anti-alias filtering and decimation
 src/tellus/continuation.py  move a grid to flight altitude (upward only)
 tests/test_sensor.py        checks the emulator against the measured flight
+
+scripts/run_pf_demo.py      headline: INS alone vs INS + magnetic matching
+src/navfilter/particle.py   error-state particle filter over INS errors
+src/navfilter/maps.py       the degraded map the filter navigates on
+src/navfilter/scenario.py   end-to-end simulated flights for the filter
+src/navfilter/navigability.py  where in Ireland the map is good enough to navigate
+src/navfilter/selfmap.py    navigate a real QTFM survey on a map built from its own lines
+tests/test_pf.py            filter checks
+notebooks/particle_filter.ipynb  the filter, step by step
+notebooks/navigability.ipynb     navigability and integrity map of Ireland
+notebooks/selfmap.ipynb          self-mapping on real QTFM data
+
+scripts/extract_ardupilot_log.py  ArduPilot .bin log to one CSV per message
+notebooks/imu_static.ipynb       our Pixhawk 6C IMU, measured from a static log
+notebooks/v3_boom_flight.ipynb   V3 boom flight: interference and calibration
 
 data/                       downloads, grids and logs (not in git)
 outputs/                    generated plots (not in git)
