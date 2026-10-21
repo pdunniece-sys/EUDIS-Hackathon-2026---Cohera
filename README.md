@@ -2,7 +2,7 @@
   <img src="docs/images/cohera_lockup.png" alt="Cohera — Quantum Navigation" width="100%">
 </p>
 
-# Cohera - 2nd Place - Application only Event 
+# Cohera - 2nd Place (€6000) -  Application only Event 
 
 **2nd place, EUDIS Defence Hackathon 2026, Dublin. Challenge 1: Navigation without GNSS.**
 
